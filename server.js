@@ -1,80 +1,177 @@
 const express = require("express");
+const mongoose = require("mongoose");
+require("dotenv").config();
+
+const Task = require("./models/Task");
+
 const app = express();
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
+
+// ===============================
+// Middleware
+// ===============================
+
+// Parse JSON request bodies
 app.use(express.json());
 
-// Logging Middleware
+// Request Logging Middleware
 app.use((req, res, next) => {
-    console.log(`${req.method} ${req.url} - ${new Date().toLocaleString()}`);
+    console.log(
+        `${req.method} ${req.url} - ${new Date().toISOString()}`
+    );
     next();
 });
 
-// In-memory Task Array
-let tasks = [
-    { id: 1, title: "Complete Practical 4" },
-    { id: 2, title: "Submit GitHub Repository" }
-];
+// ===============================
+// GET ALL TASKS
+// ===============================
 
-// GET
-app.get("/tasks", (req, res) => {
-    res.status(200).json(tasks);
-});
+app.get("/tasks", async (req, res, next) => {
+    try {
+        const tasks = await Task.find();
 
-// POST
-app.post("/tasks", (req, res) => {
-
-    const task = {
-        id: tasks.length + 1,
-        title: req.body.title
-    };
-
-    tasks.push(task);
-    res.status(201).json(task);
-});
-
-// PUT
-app.put("/tasks/:id", (req, res) => {
-
-    const id = parseInt(req.params.id);
-    const task = tasks.find(t => t.id === id);
-    if (!task) {
-        return res.status(404).json({
-            message: "Task not found"
-        });
+        res.status(200).json(tasks);
+    } catch (error) {
+        next(error);
     }
-
-    task.title = req.body.title;
-    res.status(200).json(task);
 });
 
-// DELETE
-app.delete("/tasks/:id", (req, res) => {
+// ===============================
+// GET TASK BY ID
+// ===============================
 
-    const id = parseInt(req.params.id);
-    const index = tasks.findIndex(t => t.id === id);
-    if (index === -1) {
-        return res.status(404).json({
-            message: "Task not found"
-        });
+app.get("/tasks/:id", async (req, res, next) => {
+    try {
+        const task = await Task.findById(req.params.id);
+
+        if (!task) {
+            return res.status(404).json({
+                error: "Task not found"
+            });
+        }
+
+        res.status(200).json(task);
+    } catch (error) {
+        next(error);
     }
+});
 
-    tasks.splice(index,1);
-    res.status(200).json({
-        message:"Task Deleted Successfully"
+// ===============================
+// CREATE TASK
+// ===============================
+
+app.post("/tasks", async (req, res, next) => {
+    try {
+        const task = await Task.create(req.body);
+
+        res.status(201).json(task);
+    } catch (error) {
+        next(error);
+    }
+});
+
+// ===============================
+// UPDATE TASK
+// ===============================
+
+app.put("/tasks/:id", async (req, res, next) => {
+    try {
+        const task = await Task.findByIdAndUpdate(
+            req.params.id,
+            req.body,
+            {
+                new: true,
+                runValidators: true
+            }
+        );
+
+        if (!task) {
+            return res.status(404).json({
+                error: "Task not found"
+            });
+        }
+
+        res.status(200).json(task);
+    } catch (error) {
+        next(error);
+    }
+});
+
+// ===============================
+// DELETE TASK
+// ===============================
+
+app.delete("/tasks/:id", async (req, res, next) => {
+    try {
+        const task = await Task.findByIdAndDelete(req.params.id);
+
+        if (!task) {
+            return res.status(404).json({
+                error: "Task not found"
+            });
+        }
+
+        res.status(200).json({
+            message: "Task deleted successfully",
+            task: task
+        });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// ===============================
+// 404 ROUTE
+// ===============================
+
+app.use((req, res) => {
+    res.status(404).json({
+        error: "Route not found"
     });
-
 });
 
-// Global Error Handler
+// ===============================
+// GLOBAL ERROR HANDLER
+// ===============================
+
 app.use((err, req, res, next) => {
+    console.error(err);
 
-    console.error(err.stack);
+    // Mongoose validation error
+    if (err.name === "ValidationError") {
+        return res.status(400).json({
+            error: "Validation failed",
+            details: Object.values(err.errors).map(
+                (error) => error.message
+            )
+        });
+    }
+
+    // Invalid MongoDB ObjectId
+    if (err.name === "CastError") {
+        return res.status(400).json({
+            error: "Invalid task ID"
+        });
+    }
+
     res.status(500).json({
-        error:"Something went wrong"
+        error: "Something went wrong"
     });
-
 });
 
-app.listen(PORT, () => {
-    console.log(`Server Running on Port ${PORT}`);
-});
+// ===============================
+// MongoDB Connection
+// ===============================
+
+mongoose
+    .connect(process.env.MONGO_URI)
+    .then(() => {
+        console.log("MongoDB connected successfully");
+
+        app.listen(PORT, () => {
+            console.log(`Server running on port ${PORT}`);
+        });
+    })
+    .catch((error) => {
+        console.error("MongoDB connection failed:", error);
+    });
