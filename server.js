@@ -1,3 +1,4 @@
+const cors = require("cors");
 const express = require("express");
 const mongoose = require("mongoose");
 require("dotenv").config();
@@ -5,14 +6,13 @@ require("dotenv").config();
 const Task = require("./models/Task");
 
 const app = express();
+app.use(cors());
+app.use(express.json());
 const PORT = process.env.PORT || 5000;
 
 // ===============================
 // Middleware
 // ===============================
-
-// Parse JSON request bodies
-app.use(express.json());
 
 // Request Logging Middleware
 app.use((req, res, next) => {
