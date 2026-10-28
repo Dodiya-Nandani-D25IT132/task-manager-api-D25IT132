@@ -3,18 +3,29 @@ const express = require("express");
 const mongoose = require("mongoose");
 require("dotenv").config();
 
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+
 const Task = require("./models/Task");
+const User = require("./models/User");
+
+const {
+    validateRegister,
+    validateLogin,
+    validateTask
+} = require("./middleware/validation");
 
 const app = express();
+
 app.use(cors());
 app.use(express.json());
+
 const PORT = process.env.PORT || 5000;
 
 // ===============================
-// Middleware
+// Request Logging Middleware
 // ===============================
 
-// Request Logging Middleware
 app.use((req, res, next) => {
     console.log(
         `${req.method} ${req.url} - ${new Date().toISOString()}`
@@ -23,24 +34,146 @@ app.use((req, res, next) => {
 });
 
 // ===============================
-// GET ALL TASKS
+// JWT AUTHENTICATION MIDDLEWARE
 // ===============================
 
-app.get("/tasks", async (req, res, next) => {
+const authenticateToken = (req, res, next) => {
+    try {
+        const authHeader = req.headers.authorization;
+
+        if (!authHeader) {
+            return res.status(401).json({
+                error: "Authorization header missing"
+            });
+        }
+
+        const token = authHeader.split(" ")[1];
+
+        if (!token) {
+            return res.status(401).json({
+                error: "Token missing"
+            });
+        }
+
+        const decoded = jwt.verify(
+            token,
+            process.env.JWT_SECRET
+        );
+
+        req.user = decoded;
+
+        next();
+
+    } catch (error) {
+        return res.status(401).json({
+            error: "Invalid or expired token"
+        });
+    }
+};
+
+// ===============================
+// REGISTER
+// ===============================
+
+app.post("/register", validateRegister, async (req, res, next) => {
+    try {
+        const { email, password } = req.body;
+
+        const existingUser = await User.findOne({ email });
+
+        if (existingUser) {
+            return res.status(400).json({
+                error: "User already exists"
+            });
+        }
+
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        const user = await User.create({
+            email: email,
+            password: hashedPassword
+        });
+
+        res.status(201).json({
+            message: "User registered successfully",
+            user: {
+                id: user._id,
+                email: user.email
+            }
+        });
+
+    } catch (err) {
+        next(err);
+    }
+});
+
+// ===============================
+// LOGIN
+// ===============================
+
+app.post("/login", validateLogin, async (req, res, next) => {
+    try {
+        const { email, password } = req.body;
+
+        const user = await User.findOne({ email });
+
+        if (!user) {
+            return res.status(401).json({
+                error: "Invalid email or password"
+            });
+        }
+
+        const isMatch = await bcrypt.compare(
+            password,
+            user.password
+        );
+
+        if (!isMatch) {
+            return res.status(401).json({
+                error: "Invalid email or password"
+            });
+        }
+
+        const token = jwt.sign(
+            {
+                id: user._id
+            },
+            process.env.JWT_SECRET,
+            {
+                expiresIn: "1h"
+            }
+        );
+
+        res.status(200).json({
+            message: "Login successful",
+            token: token
+        });
+
+    } catch (err) {
+        next(err);
+    }
+});
+
+// ===============================
+// GET ALL TASKS - PROTECTED
+// ===============================
+
+app.get("/tasks", authenticateToken, async (req, res, next) => {
     try {
         const tasks = await Task.find();
 
         res.status(200).json(tasks);
+
     } catch (error) {
         next(error);
     }
 });
 
 // ===============================
-// GET TASK BY ID
+// GET TASK BY ID - PROTECTED
 // ===============================
 
-app.get("/tasks/:id", async (req, res, next) => {
+app.get("/tasks/:id", authenticateToken, async (req, res, next) => {
     try {
         const task = await Task.findById(req.params.id);
 
@@ -51,30 +184,37 @@ app.get("/tasks/:id", async (req, res, next) => {
         }
 
         res.status(200).json(task);
+
     } catch (error) {
         next(error);
     }
 });
 
 // ===============================
-// CREATE TASK
+// CREATE TASK - PROTECTED + VALIDATED
 // ===============================
 
-app.post("/tasks", async (req, res, next) => {
-    try {
-        const task = await Task.create(req.body);
+app.post(
+    "/tasks",
+    authenticateToken,
+    validateTask,
+    async (req, res, next) => {
+        try {
+            const task = await Task.create(req.body);
 
-        res.status(201).json(task);
-    } catch (error) {
-        next(error);
+            res.status(201).json(task);
+
+        } catch (error) {
+            next(error);
+        }
     }
-});
+);
 
 // ===============================
-// UPDATE TASK
+// UPDATE TASK - PROTECTED
 // ===============================
 
-app.put("/tasks/:id", async (req, res, next) => {
+app.put("/tasks/:id", authenticateToken, async (req, res, next) => {
     try {
         const task = await Task.findByIdAndUpdate(
             req.params.id,
@@ -92,16 +232,17 @@ app.put("/tasks/:id", async (req, res, next) => {
         }
 
         res.status(200).json(task);
+
     } catch (error) {
         next(error);
     }
 });
 
 // ===============================
-// DELETE TASK
+// DELETE TASK - PROTECTED
 // ===============================
 
-app.delete("/tasks/:id", async (req, res, next) => {
+app.delete("/tasks/:id", authenticateToken, async (req, res, next) => {
     try {
         const task = await Task.findByIdAndDelete(req.params.id);
 
@@ -115,6 +256,7 @@ app.delete("/tasks/:id", async (req, res, next) => {
             message: "Task deleted successfully",
             task: task
         });
+
     } catch (error) {
         next(error);
     }
@@ -160,7 +302,7 @@ app.use((err, req, res, next) => {
 });
 
 // ===============================
-// MongoDB Connection
+// MONGODB CONNECTION
 // ===============================
 
 mongoose
