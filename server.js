@@ -15,6 +15,10 @@ const {
     validateTask
 } = require("./middleware/validation");
 
+const NodeCache = require("node-cache");
+const cache = new NodeCache({ stdTTL: 60 });
+const taskEvents = require("./listeners");
+
 const app = express();
 
 app.use(cors());
@@ -155,12 +159,20 @@ app.post("/login", validateLogin, async (req, res, next) => {
 });
 
 // ===============================
-// GET ALL TASKS - PROTECTED
+// GET ALL TASKS - PROTECTED (WITH IN-MEMORY CACHE)
 // ===============================
 
 app.get("/tasks", authenticateToken, async (req, res, next) => {
     try {
+        const cachedTasks = cache.get("all_tasks");
+        if (cachedTasks) {
+            console.log("[CACHE HIT] Serving tasks from node-cache");
+            return res.status(200).json(cachedTasks);
+        }
+
+        console.log("[CACHE MISS] Fetching tasks from MongoDB...");
         const tasks = await Task.find();
+        cache.set("all_tasks", tasks);
 
         res.status(200).json(tasks);
 
@@ -191,7 +203,7 @@ app.get("/tasks/:id", authenticateToken, async (req, res, next) => {
 });
 
 // ===============================
-// CREATE TASK - PROTECTED + VALIDATED
+// CREATE TASK - PROTECTED + VALIDATED (INVALIDATES CACHE)
 // ===============================
 
 app.post(
@@ -202,7 +214,16 @@ app.post(
         try {
             const task = await Task.create(req.body);
 
+            // Invalidate cached tasks list
+            cache.del("all_tasks");
+            console.log("[CACHE INVALIDATED] Removed 'all_tasks' key after task creation");
+
+            // Respond immediately to the client
+            console.log(`[API] Response sent at ${new Date().toISOString()}`);
             res.status(201).json(task);
+
+            // Emit task-created event asynchronously to background listener
+            taskEvents.emit("task-created", task);
 
         } catch (error) {
             next(error);
@@ -211,7 +232,7 @@ app.post(
 );
 
 // ===============================
-// UPDATE TASK - PROTECTED
+// UPDATE TASK - PROTECTED (INVALIDATES CACHE)
 // ===============================
 
 app.put("/tasks/:id", authenticateToken, async (req, res, next) => {
@@ -231,6 +252,10 @@ app.put("/tasks/:id", authenticateToken, async (req, res, next) => {
             });
         }
 
+        // Invalidate cached tasks list
+        cache.del("all_tasks");
+        console.log("[CACHE INVALIDATED] Removed 'all_tasks' key after task update");
+
         res.status(200).json(task);
 
     } catch (error) {
@@ -239,7 +264,7 @@ app.put("/tasks/:id", authenticateToken, async (req, res, next) => {
 });
 
 // ===============================
-// DELETE TASK - PROTECTED
+// DELETE TASK - PROTECTED (INVALIDATES CACHE)
 // ===============================
 
 app.delete("/tasks/:id", authenticateToken, async (req, res, next) => {
@@ -251,6 +276,10 @@ app.delete("/tasks/:id", authenticateToken, async (req, res, next) => {
                 error: "Task not found"
             });
         }
+
+        // Invalidate cached tasks list
+        cache.del("all_tasks");
+        console.log("[CACHE INVALIDATED] Removed 'all_tasks' key after task deletion");
 
         res.status(200).json({
             message: "Task deleted successfully",
@@ -306,14 +335,18 @@ app.use((err, req, res, next) => {
 // ===============================
 
 mongoose
-    .connect(process.env.MONGO_URI)
+    .connect(process.env.MONGO_URI || "mongodb://127.0.0.1:27017/taskmanager")
     .then(() => {
         console.log("MongoDB connected successfully");
 
-        app.listen(PORT, () => {
-            console.log(`Server running on port ${PORT}`);
-        });
+        if (process.env.NODE_ENV !== "test") {
+            app.listen(PORT, () => {
+                console.log(`Server running on port ${PORT}`);
+            });
+        }
     })
     .catch((error) => {
         console.error("MongoDB connection failed:", error);
     });
+
+module.exports = app;
